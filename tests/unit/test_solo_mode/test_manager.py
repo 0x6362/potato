@@ -742,7 +742,7 @@ class TestSoloModeManagerPersistence:
 
         pred = _make_prediction("i1", "sentiment", "positive", 0.9)
         mgr1.set_llm_prediction("i1", "sentiment", pred)
-        mgr1.human_labeled_ids.add("i1")
+        mgr1.record_human_label("i1", "sentiment", "positive", "test-user")
         mgr1.disagreement_ids.add("i1")
         mgr1.validation_sample_ids.add("i2")
         mgr1.edge_case_ids.add("i3")
@@ -841,6 +841,50 @@ class TestSoloModeManagerPersistence:
         mgr2 = SoloModeManager(solo_config, app_config)
         assert mgr2.load_state() is True
         assert 'human-only-1' in mgr2.human_labeled_ids
+        restored = mgr2.human_annotations['human-only-1']['sentiment']
+        assert restored.label == 'positive'
+        assert restored.user_id == 'annotator'
+
+    def test_legacy_id_without_value_is_unresolved_and_not_completed(self, tmp_path):
+        solo_config = _make_solo_config()
+        solo_config.state_dir = str(tmp_path)
+        state_path = tmp_path / 'solo_mode_state.json'
+        state_path.write_text(json.dumps({
+            'human_labeled_ids': ['legacy-1'],
+            'predictions': {},
+            'prompt_versions': [],
+        }))
+
+        manager = SoloModeManager(solo_config, {})
+        assert manager.load_state() is True
+
+        assert 'legacy-1' not in manager.human_labeled_ids
+        assert 'legacy-1' in manager.unresolved_human_submissions
+
+    def test_completion_requires_every_required_schema(self):
+        app_config = {
+            'annotation_schemes': [
+                {
+                    'name': 'valence',
+                    'label_requirement': {'required': True},
+                    'labels': ['positive', 'neutral', 'negative'],
+                },
+                {
+                    'name': 'hostility_or_agitation',
+                    'label_requirement': {'required': True},
+                    'labels': ['false', 'true'],
+                },
+            ],
+        }
+        manager = SoloModeManager(_make_solo_config(), app_config)
+
+        manager.record_human_label('i1', 'valence', 'neutral', 'annotator')
+        assert 'i1' not in manager.human_labeled_ids
+
+        manager.record_human_label(
+            'i1', 'hostility_or_agitation', 'false', 'annotator'
+        )
+        assert 'i1' in manager.human_labeled_ids
 
 
 # === Route Helper Methods ===
@@ -869,8 +913,13 @@ class TestSoloModeManagerRouteHelpers:
         assert stats['is_running'] is False
 
     def test_approve_llm_label(self, manager):
+        pred = _make_prediction("i5", "sentiment", "negative")
+        manager.set_llm_prediction("i5", "sentiment", pred)
+
         manager.approve_llm_label("i5")
+
         assert "i5" in manager.human_labeled_ids
+        assert manager.human_annotations["i5"]["sentiment"].label == "negative"
 
     def test_correct_llm_label(self, manager):
         pred = _make_prediction("i1", "sentiment", "positive")

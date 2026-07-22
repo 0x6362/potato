@@ -118,6 +118,60 @@ class LLMPrediction:
         )
 
 
+@dataclass(frozen=True)
+class RecordedHumanLabel:
+    """A human-provided label whose value is available for evaluation."""
+
+    instance_id: str
+    schema_name: str
+    label: Any
+    user_id: str
+    recorded_at: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'instance_id': self.instance_id,
+            'schema_name': self.schema_name,
+            'label': self.label,
+            'user_id': self.user_id,
+            'recorded_at': self.recorded_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'RecordedHumanLabel':
+        return cls(
+            instance_id=data['instance_id'],
+            schema_name=data['schema_name'],
+            label=data['label'],
+            user_id=data.get('user_id', 'unknown'),
+            recorded_at=datetime.fromisoformat(data['recorded_at']),
+        )
+
+
+@dataclass(frozen=True)
+class UnresolvedHumanSubmission:
+    """A legacy submission ID whose selected label was not persisted."""
+
+    instance_id: str
+    reason: str
+    user_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'instance_id': self.instance_id,
+            'reason': self.reason,
+            'user_id': self.user_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'UnresolvedHumanSubmission':
+        return cls(
+            instance_id=data['instance_id'],
+            reason=data['reason'],
+            user_id=data.get('user_id'),
+        )
+
+
 @dataclass
 class AgreementMetrics:
     """Metrics tracking human-LLM agreement."""
@@ -180,6 +234,12 @@ class SoloModeManager:
         self.predictions: Dict[str, Dict[str, LLMPrediction]] = {}  # instance_id -> schema -> prediction
 
         # Instance tracking
+        self.human_annotations: Dict[
+            str, Dict[str, RecordedHumanLabel]
+        ] = {}
+        self.unresolved_human_submissions: Dict[
+            str, UnresolvedHumanSubmission
+        ] = {}
         self.human_labeled_ids: Set[str] = set()
         self.llm_labeled_ids: Set[str] = set()
         self.disagreement_ids: Set[str] = set()
@@ -1890,6 +1950,27 @@ class SoloModeManager:
 
     # === Human Label Recording ===
 
+    def _required_schema_names(self) -> Set[str]:
+        schemes = self.app_config.get('annotation_schemes', [])
+        required = {
+            scheme.get('name', 'default')
+            for scheme in schemes
+            if scheme.get('label_requirement', {}).get('required', True)
+        }
+        if required:
+            return required
+        if schemes:
+            return {schemes[0].get('name', 'default')}
+        return {'default'}
+
+    def _refresh_human_labeled_ids(self) -> None:
+        required = self._required_schema_names()
+        self.human_labeled_ids = {
+            instance_id
+            for instance_id, annotations in self.human_annotations.items()
+            if required.issubset(annotations.keys())
+        }
+
     def record_human_label(
         self,
         instance_id: str,
@@ -1910,7 +1991,15 @@ class SoloModeManager:
             True if agrees with LLM, False if disagrees, None if no LLM prediction
         """
         with self._lock:
-            self.human_labeled_ids.add(instance_id)
+            record = RecordedHumanLabel(
+                instance_id=instance_id,
+                schema_name=schema_name,
+                label=label,
+                user_id=user_id,
+            )
+            self.human_annotations.setdefault(instance_id, {})[schema_name] = record
+            self.unresolved_human_submissions.pop(instance_id, None)
+            self._refresh_human_labeled_ids()
 
             prediction = self.get_llm_prediction(instance_id, schema_name)
             if prediction is None:
@@ -2595,6 +2684,17 @@ class SoloModeManager:
                         for iid, schemas in self.predictions.items()
                     },
                     'human_labeled_ids': list(self.human_labeled_ids),
+                    'human_annotations': {
+                        iid: {
+                            schema: annotation.to_dict()
+                            for schema, annotation in annotations.items()
+                        }
+                        for iid, annotations in self.human_annotations.items()
+                    },
+                    'unresolved_human_submissions': {
+                        iid: submission.to_dict()
+                        for iid, submission in self.unresolved_human_submissions.items()
+                    },
                     'llm_labeled_ids': list(self.llm_labeled_ids),
                     'disagreement_ids': list(self.disagreement_ids),
                     'validation_sample_ids': list(self.validation_sample_ids),
@@ -2678,7 +2778,34 @@ class SoloModeManager:
                     for iid, schemas in state.get('predictions', {}).items()
                 }
 
-                self.human_labeled_ids = set(state.get('human_labeled_ids', []))
+                self.human_annotations = {
+                    iid: {
+                        schema: RecordedHumanLabel.from_dict(annotation)
+                        for schema, annotation in annotations.items()
+                    }
+                    for iid, annotations in state.get(
+                        'human_annotations', {}
+                    ).items()
+                }
+                self.unresolved_human_submissions = {
+                    iid: UnresolvedHumanSubmission.from_dict(submission)
+                    for iid, submission in state.get(
+                        'unresolved_human_submissions', {}
+                    ).items()
+                }
+                represented_ids = (
+                    set(self.human_annotations)
+                    | set(self.unresolved_human_submissions)
+                )
+                for instance_id in state.get('human_labeled_ids', []):
+                    if instance_id not in represented_ids:
+                        self.unresolved_human_submissions[instance_id] = (
+                            UnresolvedHumanSubmission(
+                                instance_id=instance_id,
+                                reason='Legacy state contained no human label value',
+                            )
+                        )
+                self._refresh_human_labeled_ids()
                 self.llm_labeled_ids = set(state.get('llm_labeled_ids', []))
                 self.disagreement_ids = set(state.get('disagreement_ids', []))
                 self.validation_sample_ids = set(state.get('validation_sample_ids', []))
@@ -2931,9 +3058,16 @@ class SoloModeManager:
 
     def approve_llm_label(self, instance_id: str) -> None:
         """Approve an LLM label during review."""
-        # Mark as validated/approved
-        with self._lock:
-            self.human_labeled_ids.add(instance_id)
+        schemes = self.app_config.get('annotation_schemes', [])
+        schema_name = schemes[0].get('name', 'default') if schemes else 'default'
+        prediction = self.get_llm_prediction(instance_id, schema_name)
+        if prediction is not None:
+            self.record_human_label(
+                instance_id,
+                schema_name,
+                prediction.predicted_label,
+                'reviewer',
+            )
 
     def correct_llm_label(self, instance_id: str, corrected_label: Any) -> None:
         """Correct an LLM label during review."""
@@ -2962,6 +3096,17 @@ class SoloModeManager:
         with self._lock:
             return {
                 'human_labels': list(self.human_labeled_ids),
+                'human_annotations': {
+                    iid: {
+                        schema: annotation.to_dict()
+                        for schema, annotation in annotations.items()
+                    }
+                    for iid, annotations in self.human_annotations.items()
+                },
+                'unresolved_human_submissions': [
+                    submission.to_dict()
+                    for submission in self.unresolved_human_submissions.values()
+                ],
                 'llm_labels': {
                     iid: {s: p.to_dict() for s, p in schemas.items()}
                     for iid, schemas in self.predictions.items()
