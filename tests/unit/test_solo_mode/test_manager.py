@@ -823,6 +823,25 @@ class TestSoloModeManagerPersistence:
         assert restored is not None
         assert restored.text == 'Mixed sentiment'
 
+    def test_human_label_without_prediction_survives_restart(self, tmp_path):
+        solo_config = _make_solo_config()
+        solo_config.state_dir = str(tmp_path)
+        app_config = {
+            'annotation_schemes': [
+                {'name': 'sentiment', 'annotation_type': 'radio',
+                 'labels': ['positive', 'negative']},
+            ],
+        }
+        mgr1 = SoloModeManager(solo_config, app_config)
+
+        assert mgr1.record_human_label(
+            'human-only-1', 'sentiment', 'positive', 'annotator'
+        ) is None
+
+        mgr2 = SoloModeManager(solo_config, app_config)
+        assert mgr2.load_state() is True
+        assert 'human-only-1' in mgr2.human_labeled_ids
+
 
 # === Route Helper Methods ===
 

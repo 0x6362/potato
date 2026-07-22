@@ -1914,6 +1914,7 @@ class SoloModeManager:
 
             prediction = self.get_llm_prediction(instance_id, schema_name)
             if prediction is None:
+                self._save_state()
                 return None
 
             prediction.human_label = label
