@@ -27,7 +27,15 @@ def _create_solo_mode_test_config(test_dir):
     os.makedirs(data_dir, exist_ok=True)
 
     test_data = [
-        {"id": f"api_{i:03d}", "text": f"Test text number {i}."}
+        {
+            "id": f"api_{i:03d}",
+            "text": f"Raw scorer input number {i}.",
+            "conversation": [
+                {"speaker": "User", "text": f"Question number {i}."},
+                {"speaker": "Assistant", "text": f"Answer number {i}."},
+                {"speaker": "User (target)", "text": f"Target number {i}."},
+            ],
+        }
         for i in range(10)
     ]
     data_file = os.path.join(data_dir, "test_data.json")
@@ -39,6 +47,13 @@ def _create_solo_mode_test_config(test_dir):
         'verbose': True,
         'annotation_task_name': 'solo_api_test',
         'output_annotation_dir': 'annotations',
+        'instance_display': {
+            'fields': [{
+                'key': 'conversation',
+                'type': 'dialogue',
+                'display_options': {'show_turn_numbers': True},
+            }],
+        },
         'solo_mode': {
             'enabled': True,
             # Dummy model — passes config validation but never used by API tests
@@ -309,6 +324,9 @@ class TestSoloModePageRoutes:
     def test_annotate_page(self, solo_server, authed_session):
         response = authed_session.get(f"{solo_server.base_url}/solo/annotate")
         assert response.status_code == 200
+        assert 'dialogue-display-content' in response.text
+        assert 'User (target)' in response.text
+        assert '<div class="instance-text"' not in response.text
 
     def test_status_page(self, solo_server, authed_session):
         response = authed_session.get(f"{solo_server.base_url}/solo/status")

@@ -26,6 +26,7 @@ from flask import (
 from functools import wraps
 from typing import Any, Dict, Optional
 
+from .instance_view import DisplayError, build_solo_instance_view
 from .manager import get_solo_mode_manager
 from .phase_controller import SoloPhase
 from potato.item_state_management import get_item_state_manager
@@ -347,11 +348,18 @@ def annotate():
     try:
         ism = get_item_state_manager()
         item = ism.get_item(instance_id)
-        instance = {
-            'id': instance_id,
-            'text': item.get_displayed_text(),
-            'data': item.get_data(),
-        }
+        instance = build_solo_instance_view(
+            instance_id=instance_id,
+            displayed_text=item.get_displayed_text(),
+            instance_data=item.get_data(),
+            app_config=manager.app_config,
+        )
+        if isinstance(instance.display, DisplayError):
+            logger.error(
+                "Solo Mode instance display failed for %s: %s",
+                instance_id,
+                instance.display.message,
+            )
     except ValueError as e:
         logger.error(f"ItemStateManager not initialized when fetching instance {instance_id}: {e}")
         return render_template(

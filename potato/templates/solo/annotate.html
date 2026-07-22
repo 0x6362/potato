@@ -96,6 +96,16 @@
         font-variant-numeric: tabular-nums;
         color: var(--foreground, #09090b);
     }
+
+    .solo-display-error {
+        padding: var(--space-md, 1rem);
+        margin-bottom: var(--space-md, 1rem);
+        color: var(--destructive, #ef4444);
+        background: color-mix(in oklab, var(--destructive, #ef4444) 8%, transparent);
+        border: 1px solid color-mix(in oklab, var(--destructive, #ef4444) 30%, transparent);
+        border-radius: var(--radius, 0.5rem);
+        white-space: pre-wrap;
+    }
 </style>
 {% endblock %}
 
@@ -115,9 +125,19 @@
         <input type="hidden" name="instance_id" value="{{ instance.id }}">
         <input type="hidden" name="annotation" id="selected-label" value="">
 
-        <div class="instance-text" id="instance-text">
-            {{ instance.text }}
+        {% if instance.display.kind == 'structured' %}
+        <div class="instance-display" id="instance-display">
+            {{ instance.display.html|safe }}
         </div>
+        {% elif instance.display.kind == 'plain_text' %}
+        <div class="instance-text" id="instance-text">
+            {{ instance.display.text }}
+        </div>
+        {% else %}
+        <div class="solo-display-error" id="instance-display-error" role="alert">
+            Unable to render this instance: {{ instance.display.message }}
+        </div>
+        {% endif %}
 
         {% if llm_prediction %}
         {% set conf = (llm_prediction.confidence * 100)|int %}
