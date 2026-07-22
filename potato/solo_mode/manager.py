@@ -2510,10 +2510,11 @@ class SoloModeManager:
                 # Check if we've hit the max parallel labels
                 with self._lock:
                     current_count = len(self.llm_labeled_ids - self.human_labeled_ids)
-                    if current_count >= max_labels:
-                        logger.debug(f"Max parallel labels reached ({current_count})")
-                        time.sleep(10)
-                        continue
+
+                if current_count >= max_labels:
+                    logger.debug(f"Max parallel labels reached ({current_count})")
+                    self._stop_labeling.wait(10)
+                    continue
 
                 # Label a batch of instances
                 labeled_count = self._label_batch(batch_size)
