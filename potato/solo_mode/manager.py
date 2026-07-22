@@ -2616,6 +2616,11 @@ class SoloModeManager:
                 if self._edge_case_rule_manager is not None:
                     state['edge_case_rule_data'] = self._edge_case_rule_manager.to_dict()
 
+                if self._edge_case_synthesizer is not None:
+                    state['edge_case_synthesizer_data'] = (
+                        self._edge_case_synthesizer.to_dict()
+                    )
+
                 # Persist ValidationTracker so confusion matrix and comparison
                 # history survive restarts. Without this, /api/confusion-analysis,
                 # /api/disagreement-explorer, and the dashboard's confusion tab
@@ -2721,6 +2726,10 @@ class SoloModeManager:
                     self._edge_case_rule_manager = EdgeCaseRuleManager.from_dict(
                         ecr_data, state_dir=self.config.state_dir
                     )
+
+                synthesizer_data = state.get('edge_case_synthesizer_data')
+                if synthesizer_data:
+                    self.edge_case_synthesizer.from_dict(synthesizer_data)
 
                 # Restore ValidationTracker (confusion matrix + comparison history)
                 vt_data = state.get('validation_tracker')

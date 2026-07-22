@@ -48,3 +48,39 @@ class TestFreeTextQuery:
         ep.query("prompt", Schema)
         _, kwargs = client.chat.completions.create.call_args
         assert kwargs["response_format"]["type"] == "json_schema"
+
+
+class TestOpenAIOutputLimitSerialization:
+    def test_official_openai_uses_max_completion_tokens(self):
+        from potato.ai.openai_endpoint import (
+            OfficialOpenAI,
+            build_chat_completion_request,
+        )
+
+        request = build_chat_completion_request(
+            target=OfficialOpenAI(),
+            model="gpt-5.4-mini",
+            messages=[{"role": "user", "content": "prompt"}],
+            max_output_tokens=512,
+            temperature=0.1,
+        )
+
+        assert request["max_completion_tokens"] == 512
+        assert "max_tokens" not in request
+
+    def test_compatible_server_keeps_max_tokens(self):
+        from potato.ai.openai_endpoint import (
+            CompatibleOpenAI,
+            build_chat_completion_request,
+        )
+
+        request = build_chat_completion_request(
+            target=CompatibleOpenAI("http://localhost:9000/v1"),
+            model="local-model",
+            messages=[{"role": "user", "content": "prompt"}],
+            max_output_tokens=256,
+            temperature=0.0,
+        )
+
+        assert request["max_tokens"] == 256
+        assert "max_completion_tokens" not in request

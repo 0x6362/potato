@@ -5,11 +5,52 @@ This module provides integration with OpenAI's API for LLM inference.
 """
 
 import os
-from typing import Dict, List
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Union
+
 from openai import OpenAI
+
 from .ai_endpoint import BaseAIEndpoint, AIEndpointRequestError, ModelCapabilities
 
 DEFAULT_MODEL = "gpt-4o-mini"
+
+
+@dataclass(frozen=True)
+class OfficialOpenAI:
+    """The OpenAI-hosted Chat Completions API."""
+
+
+@dataclass(frozen=True)
+class CompatibleOpenAI:
+    """An OpenAI-compatible server with its own request compatibility."""
+
+    base_url: str
+
+
+OpenAITarget = Union[OfficialOpenAI, CompatibleOpenAI]
+
+
+def build_chat_completion_request(
+    target: OpenAITarget,
+    model: str,
+    messages: List[Dict[str, str]],
+    max_output_tokens: int,
+    temperature: float,
+    response_format: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Serialize a provider-neutral output limit for the selected target."""
+    request = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if isinstance(target, OfficialOpenAI):
+        request["max_completion_tokens"] = max_output_tokens
+    else:
+        request["max_tokens"] = max_output_tokens
+    if response_format is not None:
+        request["response_format"] = response_format
+    return request
 
 
 class OpenAIEndpoint(BaseAIEndpoint):
@@ -34,6 +75,9 @@ class OpenAIEndpoint(BaseAIEndpoint):
             "OPENAI_API_KEY", ""
         )
         base_url = self.ai_config.get("base_url")
+        self.target: OpenAITarget = (
+            CompatibleOpenAI(base_url) if base_url else OfficialOpenAI()
+        )
         if not api_key:
             if base_url:
                 api_key = "EMPTY"  # non-empty placeholder for local servers
@@ -68,22 +112,25 @@ class OpenAIEndpoint(BaseAIEndpoint):
             AIEndpointRequestError: If the request fails
         """
         try:
-            kwargs = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": self.max_tokens,
-                "temperature": self.temperature,
-            }
             # Free-text when no schema is requested (e.g. the model arena);
             # structured JSON output only when an output_format is supplied.
+            response_format = None
             if output_format is not None and hasattr(output_format, "model_json_schema"):
-                kwargs["response_format"] = {
+                response_format = {
                     "type": "json_schema",
                     "json_schema": {
                         "name": getattr(output_format, "__name__", "output"),
                         "schema": output_format.model_json_schema(),
                     },
                 }
+            kwargs = build_chat_completion_request(
+                target=self.target,
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_output_tokens=self.max_tokens,
+                temperature=self.temperature,
+                response_format=response_format,
+            )
             response = self.client.chat.completions.create(**kwargs)
             return response.choices[0].message.content
         except Exception as e:
@@ -92,13 +139,14 @@ class OpenAIEndpoint(BaseAIEndpoint):
     def chat_query(self, messages: List[Dict[str, str]]) -> str:
         """Send a multi-turn chat to OpenAI using native messages API."""
         try:
-            response = self.client.chat.completions.create(
+            kwargs = build_chat_completion_request(
+                target=self.target,
                 model=self.model,
                 messages=messages,
-                max_tokens=self.max_tokens,
+                max_output_tokens=self.max_tokens,
                 temperature=self.temperature,
             )
+            response = self.client.chat.completions.create(**kwargs)
             return response.choices[0].message.content
         except Exception as e:
             raise AIEndpointRequestError(f"OpenAI chat request failed: {e}")
-

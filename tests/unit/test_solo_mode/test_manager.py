@@ -24,6 +24,7 @@ from potato.solo_mode.manager import (
     clear_solo_mode_manager,
 )
 from potato.solo_mode.config import SoloModeConfig, parse_solo_mode_config
+from potato.solo_mode.edge_case_synthesizer import EdgeCase
 
 
 def _make_solo_config(**overrides):
@@ -795,6 +796,32 @@ class TestSoloModeManagerPersistence:
         assert os.path.exists(state_file)
         # No temp file should remain
         assert not os.path.exists(state_file + '.tmp')
+
+    def test_synthesized_edge_cases_survive_restart(self, tmp_path):
+        solo_config = _make_solo_config()
+        solo_config.state_dir = str(tmp_path)
+        app_config = {
+            'annotation_schemes': [
+                {'name': 'sentiment', 'annotation_type': 'radio',
+                 'labels': ['positive', 'negative']},
+            ],
+        }
+        mgr1 = SoloModeManager(solo_config, app_config)
+        mgr1.edge_case_synthesizer.edge_cases['edge_0001'] = EdgeCase(
+            id='edge_0001',
+            text='Mixed sentiment',
+            boundary_labels=['positive', 'negative'],
+            difficulty_reason='Contains both signals',
+            which_aspect='mixed valence',
+        )
+        mgr1._save_state()
+
+        mgr2 = SoloModeManager(solo_config, app_config)
+        assert mgr2.load_state() is True
+
+        restored = mgr2.edge_case_synthesizer.get_edge_case('edge_0001')
+        assert restored is not None
+        assert restored.text == 'Mixed sentiment'
 
 
 # === Route Helper Methods ===

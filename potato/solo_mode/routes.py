@@ -26,6 +26,8 @@ from flask import (
 from functools import wraps
 from typing import Any, Dict, Optional
 
+from .edge_case_synthesizer import SynthesisFailed
+from .edge_case_view import build_edge_case_page_state
 from .instance_view import DisplayError, build_solo_instance_view
 from .manager import get_solo_mode_manager
 from .phase_controller import SoloPhase
@@ -210,6 +212,13 @@ def prompt_editor():
                 pass  # Already in or past this phase
             return redirect(url_for('solo_mode.annotate'))
 
+        elif action == 'start_annotation':
+            try:
+                manager.advance_to_phase(SoloPhase.PARALLEL_ANNOTATION)
+            except ValueError:
+                pass
+            return redirect(url_for('solo_mode.annotate'))
+
     # Get prompt history
     prompt_history = []
     for pv in manager.get_all_prompt_versions():
@@ -239,14 +248,32 @@ def edge_cases():
     POST: Submit label for an edge case
     """
     manager = get_solo_mode_manager()
+    synthesis_error = None
 
     if request.method == 'POST':
+        action = request.form.get('action', 'label')
+
+        if action == 'retry_synthesis':
+            outcome = manager.edge_case_synthesizer.synthesize_edge_cases(
+                task_description=manager.get_task_description() or '',
+                prompt=manager.get_current_prompt_text(),
+                num_cases=5,
+            )
+            if isinstance(outcome, SynthesisFailed):
+                synthesis_error = outcome.error
+            else:
+                manager._save_state()
+                if manager.get_current_phase() == SoloPhase.EDGE_CASE_SYNTHESIS:
+                    manager.advance_to_phase(SoloPhase.EDGE_CASE_LABELING)
+                return redirect(url_for('solo_mode.edge_cases'))
+
         case_id = request.form.get('case_id')
         label = request.form.get('label')
         notes = request.form.get('notes', '')
 
-        if case_id and label:
+        if action == 'label' and case_id and label:
             manager.edge_case_synthesizer.record_label(case_id, label, notes)
+            manager._save_state()
 
             # Check if all edge cases are labeled
             unlabeled = manager.edge_case_synthesizer.get_unlabeled_edge_cases()
@@ -257,35 +284,46 @@ def edge_cases():
 
             return jsonify({'success': True, 'remaining': len(unlabeled)})
 
-        return jsonify({'error': 'Missing case_id or label'}), 400
+        if action == 'label':
+            return jsonify({'error': 'Missing case_id or label'}), 400
 
     # Generate edge cases if needed
-    if manager.get_current_phase() == SoloPhase.EDGE_CASE_SYNTHESIS:
+    if (
+        manager.get_current_phase() == SoloPhase.EDGE_CASE_SYNTHESIS
+        and synthesis_error is None
+    ):
         unlabeled = manager.edge_case_synthesizer.get_unlabeled_edge_cases()
 
         if not unlabeled:
             # Synthesize new edge cases
-            manager.edge_case_synthesizer.synthesize_edge_cases(
+            outcome = manager.edge_case_synthesizer.synthesize_edge_cases(
                 task_description=manager.get_task_description() or '',
                 prompt=manager.get_current_prompt_text(),
                 num_cases=5,
             )
-            unlabeled = manager.edge_case_synthesizer.get_unlabeled_edge_cases()
+            if isinstance(outcome, SynthesisFailed):
+                synthesis_error = outcome.error
+            else:
+                unlabeled = manager.edge_case_synthesizer.get_unlabeled_edge_cases()
+                manager._save_state()
 
-        # Advance to labeling phase
-        manager.advance_to_phase(SoloPhase.EDGE_CASE_LABELING)
+        if unlabeled:
+            manager.advance_to_phase(SoloPhase.EDGE_CASE_LABELING)
 
     # Get edge cases to display
     unlabeled = manager.edge_case_synthesizer.get_unlabeled_edge_cases()
-    current_case = unlabeled[0] if unlabeled else None
+    page = build_edge_case_page_state(
+        unlabeled_cases=unlabeled,
+        phase=manager.get_current_phase(),
+        synthesis_error=synthesis_error,
+    )
 
     # Get available labels from config
     labels = manager.get_available_labels()
 
     return render_template(
         'solo/edge_cases.html',
-        current_case=current_case.to_dict() if current_case else None,
-        remaining_count=len(unlabeled),
+        page=page,
         labels=labels,
         phase=manager.get_current_phase().name.lower(),
     )

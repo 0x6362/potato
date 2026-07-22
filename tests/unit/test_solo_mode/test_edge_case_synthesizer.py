@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 from potato.solo_mode.edge_case_synthesizer import (
     EdgeCase,
     EdgeCaseSynthesizer,
+    SynthesisFailed,
+    SynthesisSucceeded,
 )
 
 
@@ -314,7 +316,43 @@ class TestEdgeCaseSynthesizerIdGeneration:
 class TestEdgeCaseSynthesizerSynthesizeNoEndpoint:
     """Tests for synthesis without endpoint."""
 
-    def test_no_endpoint_returns_empty(self):
+    def test_no_endpoint_returns_failure_value(self):
         s = EdgeCaseSynthesizer({}, MagicMock(revision_models=[]))
         result = s.synthesize_edge_cases("task", "prompt", num_cases=5)
-        assert result == []
+        assert isinstance(result, SynthesisFailed)
+        assert result.error.retryable is True
+
+    def test_generated_cases_return_non_empty_success(self):
+        s = EdgeCaseSynthesizer(
+            {'annotation_schemes': [{'labels': ['positive', 'negative']}]},
+            MagicMock(revision_models=[MagicMock()]),
+        )
+        endpoint = MagicMock()
+        endpoint.query.return_value = {
+            'edge_cases': [{
+                'text': 'Mixed sentiment',
+                'boundary_labels': ['positive', 'negative'],
+                'difficulty_reason': 'Contains both signals',
+                'which_aspect': 'mixed valence',
+            }]
+        }
+        s._synthesis_endpoint = endpoint
+
+        result = s.synthesize_edge_cases("task", "prompt", num_cases=1)
+
+        assert isinstance(result, SynthesisSucceeded)
+        assert len(result.cases) == 1
+
+    def test_empty_model_response_returns_failure_value(self):
+        s = EdgeCaseSynthesizer(
+            {'annotation_schemes': [{'labels': ['positive', 'negative']}]},
+            MagicMock(revision_models=[MagicMock()]),
+        )
+        endpoint = MagicMock()
+        endpoint.query.return_value = {'edge_cases': []}
+        s._synthesis_endpoint = endpoint
+
+        result = s.synthesize_edge_cases("task", "prompt", num_cases=1)
+
+        assert isinstance(result, SynthesisFailed)
+        assert "no usable edge cases" in result.error.message

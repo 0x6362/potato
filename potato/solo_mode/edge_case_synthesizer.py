@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import threading
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,35 @@ class EdgeCase:
         )
 
 
+@dataclass(frozen=True)
+class SynthesisError:
+    """A synthesis failure that can be presented and retried."""
+
+    message: str
+    retryable: bool = True
+
+
+@dataclass(frozen=True)
+class SynthesisSucceeded:
+    """A successful synthesis containing at least one edge case."""
+
+    cases: Tuple[EdgeCase, ...]
+
+    def __post_init__(self) -> None:
+        if not self.cases:
+            raise ValueError("SynthesisSucceeded requires at least one edge case")
+
+
+@dataclass(frozen=True)
+class SynthesisFailed:
+    """An expected synthesis failure modeled as a value."""
+
+    error: SynthesisError
+
+
+SynthesisOutcome = Union[SynthesisSucceeded, SynthesisFailed]
+
+
 class EdgeCaseSynthesizer:
     """
     Synthesizes edge cases for testing annotation prompts.
@@ -177,7 +206,7 @@ class EdgeCaseSynthesizer:
         prompt: str,
         num_cases: int = 5,
         existing_examples: Optional[List[str]] = None
-    ) -> List[EdgeCase]:
+    ) -> SynthesisOutcome:
         """
         Generate edge case examples.
 
@@ -188,12 +217,13 @@ class EdgeCaseSynthesizer:
             existing_examples: Optional list of real examples for context
 
         Returns:
-            List of generated EdgeCase objects
+            A non-empty success or a retryable failure value
         """
         endpoint = self._get_synthesis_endpoint()
         if endpoint is None:
-            logger.warning("No endpoint available for edge case synthesis")
-            return []
+            message = "No model endpoint is available for edge-case synthesis."
+            logger.warning(message)
+            return SynthesisFailed(SynthesisError(message))
 
         try:
             # Get labels from config
@@ -253,11 +283,15 @@ class EdgeCaseSynthesizer:
                 })
 
             logger.info(f"Synthesized {len(generated)} edge cases")
-            return generated
+            if not generated:
+                return SynthesisFailed(SynthesisError(
+                    "The model returned no usable edge cases."
+                ))
+            return SynthesisSucceeded(tuple(generated))
 
         except Exception as e:
             logger.error(f"Error synthesizing edge cases: {e}")
-            return []
+            return SynthesisFailed(SynthesisError(str(e) or e.__class__.__name__))
 
     def _generate_id(self) -> str:
         """Generate a unique edge case ID."""

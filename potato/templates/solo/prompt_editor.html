@@ -79,8 +79,12 @@
     <div class="solo-nav">
         <a href="{{ url_for('solo_mode.setup') }}" class="btn btn-secondary">&larr; Back to Setup</a>
         <div>
+            {% if phase == 'prompt_validation' %}
+            <button type="button" class="btn btn-primary" onclick="startAnnotation()">Start Annotation &rarr;</button>
+            {% else %}
             <button type="button" class="btn btn-secondary" onclick="skipToAnnotation()">Skip Edge Cases</button>
             <button type="button" class="btn btn-primary" onclick="advancePhase()">Generate Edge Cases &rarr;</button>
+            {% endif %}
         </div>
     </div>
 </form>
@@ -155,6 +159,11 @@
 
     function skipToAnnotation() {
         document.getElementById('form-action').value = 'skip_to_annotation';
+        document.getElementById('prompt-form').submit();
+    }
+
+    function startAnnotation() {
+        document.getElementById('form-action').value = 'start_annotation';
         document.getElementById('prompt-form').submit();
     }
 

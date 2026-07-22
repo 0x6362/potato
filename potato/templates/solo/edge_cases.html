@@ -8,13 +8,14 @@
 <p>These are synthetically generated examples that test the boundaries of your annotation guidelines.
    Labeling these will help refine the prompt before full annotation begins.</p>
 
-{% if current_case %}
+{% if page.kind == 'labeling' %}
 <form method="POST" action="{{ url_for('solo_mode.edge_cases') }}">
-    <input type="hidden" name="case_id" value="{{ current_case.id }}">
+    <input type="hidden" name="action" value="label">
+    <input type="hidden" name="case_id" value="{{ page.current_case.id }}">
     <input type="hidden" name="label" id="selected-label" value="">
 
     <div class="instance-text">
-        {{ current_case.text }}
+        {{ page.current_case.text }}
     </div>
 
     <div class="llm-reasoning">
@@ -23,9 +24,9 @@
             <span>▼</span>
         </div>
         <div class="llm-reasoning-content">
-            <p><strong>Difficulty:</strong> {{ current_case.difficulty_reason }}</p>
-            <p><strong>Tests aspect:</strong> {{ current_case.which_aspect }}</p>
-            <p><strong>Boundary between:</strong> {{ current_case.boundary_labels|join(' and ') }}</p>
+            <p><strong>Difficulty:</strong> {{ page.current_case.difficulty_reason }}</p>
+            <p><strong>Tests aspect:</strong> {{ page.current_case.which_aspect }}</p>
+            <p><strong>Boundary between:</strong> {{ page.current_case.boundary_labels|join(' and ') }}</p>
         </div>
     </div>
 
@@ -51,6 +52,21 @@
         <button type="submit" class="btn btn-primary" id="submit-btn" disabled>Submit Label</button>
     </div>
 </form>
+{% elif page.kind == 'blocked' %}
+<div class="alert alert-danger" role="alert">
+    <p><strong>Edge-case synthesis did not complete.</strong></p>
+    <p>{{ page.error.message }}</p>
+</div>
+
+<div class="solo-nav">
+    <a href="{{ url_for('solo_mode.prompt_editor') }}" class="btn btn-secondary">&larr; Back to Prompt</a>
+    {% if page.error.retryable %}
+    <form method="POST" action="{{ url_for('solo_mode.edge_cases') }}">
+        <input type="hidden" name="action" value="retry_synthesis">
+        <button type="submit" class="btn btn-primary">Retry Synthesis</button>
+    </form>
+    {% endif %}
+</div>
 {% else %}
 <div class="alert alert-info">
     <p>No more edge cases to label!</p>
@@ -59,7 +75,10 @@
 
 <div class="solo-nav">
     <a href="{{ url_for('solo_mode.prompt_editor') }}" class="btn btn-secondary">&larr; Back to Prompt</a>
-    <a href="{{ url_for('solo_mode.annotate') }}" class="btn btn-primary">Start Annotation &rarr;</a>
+    <form method="POST" action="{{ url_for('solo_mode.prompt_editor') }}">
+        <input type="hidden" name="action" value="start_annotation">
+        <button type="submit" class="btn btn-primary">Start Annotation &rarr;</button>
+    </form>
 </div>
 {% endif %}
 {% endblock %}
@@ -68,7 +87,7 @@
 {{ super() }}
 <div class="stat-item">
     <span class="stat-label">Remaining</span>
-    <span class="stat-value">{{ remaining_count }}</span>
+    <span class="stat-value">{{ page.remaining_count }}</span>
 </div>
 {% endblock %}
 
